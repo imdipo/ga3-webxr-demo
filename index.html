@@ -1,0 +1,159 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+  <meta charset="UTF-8">
+  <title>Platform Belajar XR - 3D Sketch & AI Tutor</title>
+  <script src="https://aframe.io/releases/1.6.0/aframe.min.js"></script>
+  <style>
+    body { margin: 0; font-family: sans-serif; }
+    #hud {
+      position: fixed; top: 12px; left: 12px; z-index: 999;
+      background: rgba(15, 23, 42, 0.85); color: #fff;
+      padding: 12px 16px; border-radius: 10px; max-width: 320px;
+      font-size: 13px; line-height: 1.4;
+    }
+    #hud button {
+      margin-top: 8px; padding: 6px 12px; border: none; border-radius: 6px;
+      background: #38bdf8; color: #0f172a; font-weight: bold; cursor: pointer;
+    }
+    #ai-box { display: none; margin-top: 10px; border-top: 1px solid #334155; padding-top: 8px; }
+    #ai-box input { width: 72%; padding: 5px; border-radius: 4px; border: none; }
+    #ai-log { margin-top: 8px; max-height: 110px; overflow-y: auto; font-size: 12px; color: #cbd5e1; }
+  </style>
+</head>
+<body>
+
+  <!-- UI Overlay -->
+  <div id="hud">
+    <b>Platform Belajar XR (3D Sketch)</b><br>
+    • <b>WASD</b>: Gerak | <b>Drag Mouse</b>: Lihat sekitar<br>
+    • Tahan <b>Spasi</b>: Pegang Stylus & Corat-coret 3D<br>
+    <button onclick="bukaAI()">🤖 Panggil AI Tutor</button>
+    <button onclick="hapusCoretan()" style="background:#f87171;">Hapus Coretan</button>
+
+    <div id="ai-box">
+      <div id="ai-subtitle" style="color:#38bdf8; font-weight:bold;">AI: "Mau nanya apa?"</div>
+      <input type="text" id="pertanyaan" placeholder="Ketik pertanyaan soal...">
+      <button onclick="kirimTanya()">Kirim</button>
+      <div id="ai-log"><b>Log Percakapan:</b><br></div>
+    </div>
+  </div>
+
+  <!-- SCENE WEBXR -->
+  <a-scene background="color: #1e293b">
+    <a-light type="ambient" color="#ffffff" intensity="0.7"></a-light>
+    <a-light type="directional" position="2 4 3" intensity="0.9"></a-light>
+
+    <!-- Lantai -->
+    <a-plane position="0 0 0" rotation="-90 0 0" width="12" height="12" color="#334155"></a-plane>
+
+    <!-- Papan Modul & Soal -->
+    <a-box position="0 1.8 -3" width="3.2" height="1.8" depth="0.08" color="#0f172a">
+      <a-text value="MODUL 1: GEOMETRI RUANG 3D\n\nSoal: Gambarkan vektor normal bidang\nmenggunakan stylus 3D di depan papan!\n\n[Klik 'Panggil AI Tutor' jika butuh bantuan]"
+              position="-1.45 0.2 0.06" width="2.9" color="#f8fafc"></a-text>
+    </a-box>
+
+    <!-- Papan Log Chat AI -->
+    <a-box position="2.5 1.8 -2.5" rotation="0 -30 0" width="1.6" height="1.8" depth="0.08" color="#020617">
+      <a-text id="board-log" value="LOG PERCAKAPAN AI:\n-------------------\nBelum ada pertanyaan."
+              position="-0.7 0.65 0.06" baseline="top" width="1.45" color="#38bdf8"></a-text>
+    </a-box>
+
+    <!-- 1. PAJANGAN ASET HASIL SCAN (SPIDOL) -->
+    <a-entity id="scanned-marker" position="-0.7 1.3 -1.8" rotation="20 30 -15">
+      <a-obj-model src="scan_fitted.obj" scale="1 1 1"></a-obj-model>
+      <a-text value="Scanned Marker (Real)" position="0 0.25 0" align="center" width="1.5" color="#a7f3d0"></a-text>
+    </a-entity>
+
+    <!-- 2. PAJANGAN ASET HASIL GENERATE AI (gen_fitted.obj) -->
+    <a-entity id="generated-prop" position="0.8 1.4 -1.8" rotation="0 -25 0">
+      <a-gltf-model src="gen_fitted.glb" scale="1 1 1"></a-gltf-model>
+      <a-text id="vr-subtitle" value="AI Stylus Prop (Generated)" position="0 0.35 0" align="center" width="1.6" color="#bae6fd"></a-text>
+    </a-entity>
+
+    <!-- Wadah Garis 3D Sketch -->
+    <a-entity id="sketch-container"></a-entity>
+
+    <!-- Kamera Player + Stylus di Tangan Kanan (Muncul saat Spasi ditekan) -->
+    <a-entity id="rig" position="0 1.6 0.5">
+      <a-camera id="cam" look-controls wasd-controls>
+        <a-cursor color="#38bdf8"></a-cursor>
+
+        <!-- Alat tulis yang "kepegang" saat Spasi ditahan -->
+        <a-entity id="hand-pen" position="0.3 -0.25 -0.6" rotation="180 0 0" visible="false">
+          <a-gltf-model src="gen_fitted.glb" scale="1 1 1"></a-gltf-model>
+          <!-- Titik ujung spidol tempat tinta keluar -->
+          <a-entity id="pen-tip" position="0 0 0.1">
+          </a-entity>
+        </a-entity>
+      </a-camera>
+    </a-entity>
+  </a-scene>
+
+  <script>
+    let isDrawing = false;
+    let lastPos = null;
+    const container = document.getElementById('sketch-container');
+    const handPen = document.getElementById('hand-pen');
+    const penTip = document.getElementById('pen-tip');
+
+    // Tahan Spasi -> Munculkan spidol di tangan & mulai corat-coret
+    window.addEventListener('keydown', (e) => {
+      if (e.code === 'Space') {
+        isDrawing = true;
+        handPen.setAttribute('visible', 'true');
+      }
+    });
+
+    // Lepas Spasi -> Sembunyikan spidol di tangan & berhenti menggambar
+    window.addEventListener('keyup', (e) => {
+      if (e.code === 'Space') {
+        isDrawing = false;
+        lastPos = null;
+        handPen.setAttribute('visible', 'false');
+      }
+    });
+
+    setInterval(() => {
+      if (!isDrawing) return;
+
+      // Ambil posisi dunia dari ujung spidol yang sedang dipegang
+      const tipPos = new THREE.Vector3();
+      penTip.object3D.getWorldPosition(tipPos);
+
+      if (lastPos && lastPos.distanceTo(tipPos) > 0.015) {
+        const line = document.createElement('a-entity');
+        line.setAttribute('line', {
+          start: `${lastPos.x} ${lastPos.y} ${lastPos.z}`,
+          end: `${tipPos.x} ${tipPos.y} ${tipPos.z}`,
+          color: '#38bdf8'
+        });
+        container.appendChild(line);
+      }
+      lastPos = tipPos.clone();
+    }, 25);
+
+    function hapusCoretan() { container.innerHTML = ''; }
+
+    // Fitur Simulasi AI Chat & Log
+    let logText = "LOG PERCAKAPAN AI:\n-------------------\n";
+    function bukaAI() {
+      document.getElementById('ai-box').style.display = 'block';
+      document.getElementById('vr-subtitle').setAttribute('value', 'AI: "Mau nanya apa?"');
+    }
+
+    function kirimTanya() {
+      const input = document.getElementById('pertanyaan');
+      const q = input.value.trim();
+      if (!q) return;
+      const jawaban = "Vektor normal tegak lurus terhadap bidang datar.";
+      document.getElementById('ai-subtitle').innerText = `AI: "${jawaban}"`;
+      document.getElementById('vr-subtitle').setAttribute('value', `AI: "${jawaban}"`);
+      document.getElementById('ai-log').innerHTML += `<div><b>Kamu:</b> ${q}<br><b>AI:</b> ${jawaban}</div><hr>`;
+      logText += `Q: ${q}\nA: ${jawaban}\n\n`;
+      document.getElementById('board-log').setAttribute('value', logText);
+      input.value = '';
+    }
+  </script>
+</body>
+</html>
