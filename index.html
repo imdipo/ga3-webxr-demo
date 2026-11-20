@@ -9,7 +9,7 @@
     #hud {
       position: fixed; top: 12px; left: 12px; z-index: 999;
       background: rgba(15, 23, 42, 0.85); color: #fff;
-      padding: 12px 16px; border-radius: 10px; max-width: 320px;
+      padding: 12px 16px; border-radius: 10px; max-width: 340px;
       font-size: 13px; line-height: 1.4;
     }
     #hud button {
@@ -23,11 +23,11 @@
 </head>
 <body>
 
-  <!-- UI Overlay -->
+  <!-- UI Overlay (Untuk Mode Browser Laptop) -->
   <div id="hud">
     <b>Platform Belajar XR (3D Sketch)</b><br>
-    • <b>WASD</b>: Gerak | <b>Drag Mouse</b>: Lihat sekitar<br>
-    • Tahan <b>Spasi</b>: Pegang Stylus & Corat-coret 3D<br>
+    • <b>Laptop:</b> WASD Gerak | Tahan <b>Spasi</b> Gambar<br>
+    • <b>VR Headset:</b> Analog Jalan | Tahan <b>Trigger</b> Gambar | <b>A/B</b> Hapus<br>
     <button onclick="bukaAI()">🤖 Panggil AI Tutor</button>
     <button onclick="hapusCoretan()" style="background:#f87171;">Hapus Coretan</button>
 
@@ -49,7 +49,7 @@
 
     <!-- Papan Modul & Soal -->
     <a-box position="0 1.8 -3" width="3.2" height="1.8" depth="0.08" color="#0f172a">
-      <a-text value="MODUL 1: GEOMETRI RUANG 3D\n\nSoal: Gambarkan vektor normal bidang\nmenggunakan stylus 3D di depan papan!\n\n[Klik 'Panggil AI Tutor' jika butuh bantuan]"
+      <a-text value="MODUL 1: GEOMETRI RUANG 3D\n\nSoal: Gambarkan vektor normal bidang\nmenggunakan stylus 3D di depan papan!\n\n[VR: Tahan Trigger untuk menggambar | Tombol A: Hapus]"
               position="-1.45 0.2 0.06" width="2.9" color="#f8fafc"></a-text>
     </a-box>
 
@@ -65,7 +65,7 @@
       <a-text value="Scanned Marker (Real)" position="0 0.25 0" align="center" width="1.5" color="#a7f3d0"></a-text>
     </a-entity>
 
-    <!-- 2. PAJANGAN ASET HASIL GENERATE AI (gen_fitted.obj) -->
+    <!-- 2. PAJANGAN ASET HASIL GENERATE AI -->
     <a-entity id="generated-prop" position="0.8 1.4 -1.8" rotation="0 -25 0">
       <a-gltf-model src="gen_fitted.glb" scale="6 6 6"></a-gltf-model>
       <a-text id="vr-subtitle" value="AI Stylus Prop (Generated)" position="0 0.35 0" align="center" width="1.6" color="#bae6fd"></a-text>
@@ -74,52 +74,98 @@
     <!-- Wadah Garis 3D Sketch -->
     <a-entity id="sketch-container"></a-entity>
 
-    <!-- Kamera Player + Stylus di Tangan Kanan (Muncul saat Spasi ditekan) -->
-    <a-entity id="rig" position="0 1.6 0.5">
-      <a-camera id="cam" look-controls wasd-controls>
+    <!-- PLAYER RIG (Mendukung Laptop & VR Headset sekaligus) -->
+    <a-entity id="rig" position="0 0 0.5">
+      <!-- Kamera -->
+      <a-camera id="cam" position="0 1.6 0" look-controls wasd-controls>
         <a-cursor color="#38bdf8"></a-cursor>
 
-        <!-- Alat tulis yang "kepegang" saat Spasi ditahan -->
-        <a-entity id="hand-pen" position="0.3 -0.25 -0.6" rotation="180 0 0" visible="false">
+        <!-- Stylus Mode Laptop (Muncul saat Spasi ditekan) -->
+        <a-entity id="hand-pen-desktop" position="0.3 -0.25 -0.6" rotation="180 0 0" visible="false">
           <a-gltf-model src="gen_fitted.glb" scale="1 1 1"></a-gltf-model>
-          <!-- Titik ujung spidol tempat tinta keluar -->
-          <a-entity id="pen-tip" position="0 0 0.1">
-          </a-entity>
+          <a-entity id="pen-tip-desktop" position="0 0 0.1"></a-entity>
         </a-entity>
       </a-camera>
+
+      <!-- VR Controller Kiri (Untuk Jalan pakai Thumbstick) -->
+<!-- VR Controller Kiri (Universal untuk Pico 4 & Quest) -->
+      <a-entity id="left-hand" hand-controls="hand: left" thumbstick-locomotion="rig: #rig; speed: 2.5"></a-entity>
+
+      <!-- VR Controller Kanan (Universal untuk Pico 4 & Quest) -->
+      <a-entity id="right-hand" hand-controls="hand: right" thumbstick-locomotion="rig: #rig; speed: 2.5">
+        <a-entity id="hand-pen-vr" position="0 -0.02 -0.08" rotation="-90 0 0" visible="true">
+          <a-gltf-model src="gen_fitted.glb" scale="1 1 1"></a-gltf-model>
+          <a-entity id="pen-tip-vr" position="0 0 0.1"></a-entity>
+        </a-entity>
+      </a-entity>
+
     </a-entity>
   </a-scene>
 
   <script>
-    let isDrawing = false;
+    // Komponen Jalan pakai Analog Thumbstick VR
+    AFRAME.registerComponent('thumbstick-locomotion', {
+      schema: { rig: { type: 'selector' }, speed: { default: 2.5 } },
+      init: function () {
+        this.axis = [0, 0];
+        this.el.addEventListener('thumbstickmoved', (evt) => {
+          this.axis = [evt.detail.x, evt.detail.y];
+        });
+      },
+      tick: function (time, delta) {
+        if (!this.axis[0] && !this.axis[1]) return;
+        const dt = delta / 1000;
+        const cam = document.getElementById('cam').object3D;
+        const forward = new THREE.Vector3();
+        const right = new THREE.Vector3();
+        cam.getWorldDirection(forward);
+        forward.y = 0; forward.normalize();
+        right.crossVectors(cam.up, forward).normalize();
+
+        const rigObj = this.data.rig.object3D;
+        rigObj.position.addScaledVector(forward, this.axis[1] * this.data.speed * dt);
+        rigObj.position.addScaledVector(right, -this.axis[0] * this.data.speed * dt);
+      }
+    });
+
+    let drawMode = null; // 'desktop' atau 'vr'
     let lastPos = null;
     const container = document.getElementById('sketch-container');
-    const handPen = document.getElementById('hand-pen');
-    const penTip = document.getElementById('pen-tip');
+    const handPenDesktop = document.getElementById('hand-pen-desktop');
+    const tipDesktop = document.getElementById('pen-tip-desktop');
+    const tipVR = document.getElementById('pen-tip-vr');
+    const rightHand = document.getElementById('right-hand');
 
-    // Tahan Spasi -> Munculkan spidol di tangan & mulai corat-coret
+    // 1. Kontrol Laptop (Spasi)
     window.addEventListener('keydown', (e) => {
       if (e.code === 'Space') {
-        isDrawing = true;
-        handPen.setAttribute('visible', 'true');
+        drawMode = 'desktop';
+        handPenDesktop.setAttribute('visible', 'true');
       }
     });
-
-    // Lepas Spasi -> Sembunyikan spidol di tangan & berhenti menggambar
     window.addEventListener('keyup', (e) => {
       if (e.code === 'Space') {
-        isDrawing = false;
+        drawMode = null;
         lastPos = null;
-        handPen.setAttribute('visible', 'false');
+        handPenDesktop.setAttribute('visible', 'false');
       }
     });
 
-    setInterval(() => {
-      if (!isDrawing) return;
+    // 2. Kontrol VR Controller Kanan (Trigger untuk Gambar, A/B untuk Hapus)
+    rightHand.addEventListener('triggerdown', () => { drawMode = 'vr'; });
+    rightHand.addEventListener('triggerup', () => { drawMode = null; lastPos = null; });
+    rightHand.addEventListener('abuttondown', hapusCoretan);
+    rightHand.addEventListener('bbuttondown', hapusCoretan);
 
-      // Ambil posisi dunia dari ujung spidol yang sedang dipegang
+    // Loop Menggambar 3D
+    setInterval(() => {
+      if (!drawMode) return;
       const tipPos = new THREE.Vector3();
-      penTip.object3D.getWorldPosition(tipPos);
+      if (drawMode === 'desktop') {
+        tipDesktop.object3D.getWorldPosition(tipPos);
+      } else if (drawMode === 'vr') {
+        tipVR.object3D.getWorldPosition(tipPos);
+      }
 
       if (lastPos && lastPos.distanceTo(tipPos) > 0.015) {
         const line = document.createElement('a-entity');
@@ -131,7 +177,7 @@
         container.appendChild(line);
       }
       lastPos = tipPos.clone();
-    }, 25);
+    }, 20);
 
     function hapusCoretan() { container.innerHTML = ''; }
 
